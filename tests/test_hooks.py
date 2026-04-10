@@ -5,10 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
+import openviking.hooks as hooks
 from openviking.hooks import (
     _estimate_tokens,
+    _ensure_server_running,
     _extract_last_user_text,
     _extract_text,
     _format_memories,
@@ -194,6 +197,34 @@ class TestInitSession:
         ctx = SimpleNamespace(room_id="r1", thread_id="t1")
         mock_client = AsyncMock()
         mock_client.create_session.return_value = {"session_id": "r1:t1"}
-        with patch("openviking.hooks.get_client", return_value=mock_client):
+        with (
+            patch("openviking.hooks._ensure_server_running", new=AsyncMock()) as ensure_server,
+            patch("openviking.hooks.get_client", return_value=mock_client),
+        ):
             await init_session(ctx)
+            ensure_server.assert_awaited_once()
             mock_client.create_session.assert_called_once_with("r1:t1")
+
+
+class TestEnsureServerRunning:
+    @pytest.mark.asyncio
+    async def test_auto_start_attempts_only_once(self) -> None:
+        mock_http = AsyncMock()
+        mock_http.get.side_effect = httpx.ConnectError("connection refused")
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_http
+
+        with (
+            patch.object(hooks, "_AUTO_START_ATTEMPTED", False),
+            patch("openviking.hooks.httpx.AsyncClient", return_value=mock_client),
+            patch("openviking.hooks.subprocess.Popen") as popen,
+            patch("openviking.hooks.asyncio.sleep", new=AsyncMock()),
+        ):
+            await _ensure_server_running()
+            await _ensure_server_running()
+
+        popen.assert_called_once_with(
+            ["uvx", "--with", "openviking", "openviking-server"],
+            stdout=hooks.subprocess.DEVNULL,
+            stderr=hooks.subprocess.DEVNULL,
+        )

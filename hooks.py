@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import subprocess
 from typing import Any
 
+import httpx
 from mindroom.hooks import EnrichmentItem, hook
 
 from .client import get_client
-from .config import COMMIT_TOKEN_THRESHOLD, RECALL_MAX_TOKENS
+from .config import COMMIT_TOKEN_THRESHOLD, OPENVIKING_URL, RECALL_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
+_AUTO_START_ATTEMPTED = False
 
 
 def _estimate_tokens(text: str) -> int:
@@ -77,6 +81,41 @@ def _session_key(ctx: Any) -> str:
     return f"{room}:{thread}"
 
 
+async def _ensure_server_running() -> None:
+    """Start OpenViking once if the configured server is unreachable."""
+    global _AUTO_START_ATTEMPTED  # noqa: PLW0603
+    timeout = httpx.Timeout(1.0, connect=1.0)
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            await client.get(OPENVIKING_URL)
+            return
+    except httpx.HTTPError:
+        if _AUTO_START_ATTEMPTED:
+            return
+        _AUTO_START_ATTEMPTED = True
+
+    try:
+        subprocess.Popen(  # noqa: S603
+            ["uvx", "--with", "openviking", "openviking-server"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        logger.warning("Failed to auto-start OpenViking server at %s", OPENVIKING_URL, exc_info=True)
+        return
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for _ in range(10):
+            try:
+                await client.get(OPENVIKING_URL)
+                return
+            except httpx.HTTPError:
+                await asyncio.sleep(0.5)
+
+    logger.warning("OpenViking server at %s did not start within 5 seconds", OPENVIKING_URL)
+
+
 # ------------------------------------------------------------------
 # Hooks
 # ------------------------------------------------------------------
@@ -91,6 +130,7 @@ def _session_key(ctx: Any) -> str:
 async def init_session(ctx: Any) -> None:
     """Initialize an OpenViking session when a new MindRoom session starts."""
     session_id = _session_key(ctx)
+    await _ensure_server_running()
     client = get_client()
     result = await client.create_session(session_id)
     if result is None:
