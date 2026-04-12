@@ -85,27 +85,22 @@ class OpenVikingClient:
         body: dict[str, Any] = {"query": query, "limit": limit}
         if namespaces:
             body["namespaces"] = namespaces
-        result = await self._post("/api/v1/find", json=body)
+        result = await self._post("/api/v1/search/find", json=body)
         if result is None:
             return []
         return result.get("results", result.get("memories", []))
 
     async def store_memory(self, uri: str, content: str) -> dict[str, Any] | None:
         return await self._post(
-            "/api/v1/resources",
+            "/api/v1/content/write",
             json={"uri": uri, "content": content},
         )
 
     async def delete_memory(self, uri: str) -> bool:
-        try:
-            resp = await self._http.request("DELETE", f"/api/v1/resources/{uri}")
-            return resp.is_success
-        except httpx.HTTPError:
-            logger.warning("OpenViking delete failed for %s", uri, exc_info=True)
-            return False
+        return await self._delete("/api/v1/fs", params={"path": uri})
 
     async def ls(self, uri: str) -> list[dict[str, Any]]:
-        result = await self._post("/api/v1/ls", json={"uri": uri})
+        result = await self._get("/api/v1/fs/ls", params={"path": uri})
         if result is None:
             return []
         return result.get("entries", result.get("resources", []))
@@ -127,6 +122,34 @@ class OpenVikingClient:
         except httpx.HTTPError:
             logger.warning("OpenViking request failed: POST %s", path, exc_info=True)
             return None
+
+    async def _get(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        try:
+            resp = await self._http.get(path, params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError:
+            logger.warning("OpenViking request failed: GET %s", path, exc_info=True)
+            return None
+
+    async def _delete(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> bool:
+        try:
+            resp = await self._http.delete(path, params=params)
+            resp.raise_for_status()
+            return True
+        except httpx.HTTPError:
+            logger.warning("OpenViking request failed: DELETE %s", path, exc_info=True)
+            return False
 
 
 def get_client() -> OpenVikingClient:

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import subprocess
 from typing import Any
 
 import httpx
@@ -82,8 +80,11 @@ def _session_key(ctx: Any) -> str:
 
 
 async def _ensure_server_running() -> None:
-    """Start OpenViking once if the configured server is unreachable."""
+    """Warn once if the configured OpenViking server is unreachable."""
     global _AUTO_START_ATTEMPTED  # noqa: PLW0603
+    if _AUTO_START_ATTEMPTED:
+        return
+
     timeout = httpx.Timeout(1.0, connect=1.0)
 
     try:
@@ -91,29 +92,12 @@ async def _ensure_server_running() -> None:
             await client.get(OPENVIKING_URL)
             return
     except httpx.HTTPError:
-        if _AUTO_START_ATTEMPTED:
-            return
         _AUTO_START_ATTEMPTED = True
-
-    try:
-        subprocess.Popen(  # noqa: S603
-            ["uvx", "--with", "openviking", "openviking-server"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        logger.warning(
+            "OpenViking server at %s is not reachable; start it manually before using this plugin",
+            OPENVIKING_URL,
+            exc_info=True,
         )
-    except OSError:
-        logger.warning("Failed to auto-start OpenViking server at %s", OPENVIKING_URL, exc_info=True)
-        return
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        for _ in range(10):
-            try:
-                await client.get(OPENVIKING_URL)
-                return
-            except httpx.HTTPError:
-                await asyncio.sleep(0.5)
-
-    logger.warning("OpenViking server at %s did not start within 5 seconds", OPENVIKING_URL)
 
 
 # ------------------------------------------------------------------

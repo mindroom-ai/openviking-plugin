@@ -51,8 +51,12 @@ class TestFind:
             "results": [{"uri": "viking://u/1", "content": "hello"}],
         }
         mock_resp.raise_for_status = MagicMock()
-        with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
             results = await client.find("hello")
+            mock_post.assert_called_once_with(
+                "/api/v1/search/find",
+                json={"query": "hello", "limit": 10},
+            )
             assert len(results) == 1
             assert results[0]["uri"] == "viking://u/1"
 
@@ -109,22 +113,35 @@ class TestMemoryOps:
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"uri": "viking://user/memories/test/abc"}
         mock_resp.raise_for_status = MagicMock()
-        with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
             result = await client.store_memory("viking://user/memories/test/abc", "content")
+            mock_post.assert_called_once_with(
+                "/api/v1/content/write",
+                json={"uri": "viking://user/memories/test/abc", "content": "content"},
+            )
             assert result is not None
 
     @pytest.mark.asyncio
     async def test_delete_memory_success(self, client: OpenVikingClient) -> None:
         mock_resp = MagicMock()
-        mock_resp.is_success = True
-        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp):
+        mock_resp.raise_for_status = MagicMock()
+        with patch.object(client._http, "delete", new_callable=AsyncMock, return_value=mock_resp) as mock_delete:
             assert await client.delete_memory("viking://user/memories/test/abc") is True
+            mock_delete.assert_called_once_with(
+                "/api/v1/fs",
+                params={"path": "viking://user/memories/test/abc"},
+            )
 
     @pytest.mark.asyncio
     async def test_delete_memory_failure(self, client: OpenVikingClient) -> None:
-        mock_resp = MagicMock()
-        mock_resp.is_success = False
-        with patch.object(client._http, "request", new_callable=AsyncMock, return_value=mock_resp):
+        import httpx
+
+        with patch.object(
+            client._http,
+            "delete",
+            new_callable=AsyncMock,
+            side_effect=httpx.ConnectError("refused"),
+        ):
             assert await client.delete_memory("viking://user/memories/test/abc") is False
 
     @pytest.mark.asyncio
@@ -132,8 +149,12 @@ class TestMemoryOps:
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"entries": [{"uri": "viking://u/1"}]}
         mock_resp.raise_for_status = MagicMock()
-        with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp):
+        with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp) as mock_get:
             entries = await client.ls("viking://user/memories/")
+            mock_get.assert_called_once_with(
+                "/api/v1/fs/ls",
+                params={"path": "viking://user/memories/"},
+            )
             assert len(entries) == 1
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -208,23 +209,19 @@ class TestInitSession:
 
 class TestEnsureServerRunning:
     @pytest.mark.asyncio
-    async def test_auto_start_attempts_only_once(self) -> None:
+    async def test_warns_only_once_when_server_is_unreachable(self, caplog: pytest.LogCaptureFixture) -> None:
         mock_http = AsyncMock()
         mock_http.get.side_effect = httpx.ConnectError("connection refused")
         mock_client = AsyncMock()
         mock_client.__aenter__.return_value = mock_http
 
+        caplog.set_level(logging.WARNING)
         with (
             patch.object(hooks, "_AUTO_START_ATTEMPTED", False),
             patch("openviking.hooks.httpx.AsyncClient", return_value=mock_client),
-            patch("openviking.hooks.subprocess.Popen") as popen,
-            patch("openviking.hooks.asyncio.sleep", new=AsyncMock()),
         ):
             await _ensure_server_running()
             await _ensure_server_running()
 
-        popen.assert_called_once_with(
-            ["uvx", "--with", "openviking", "openviking-server"],
-            stdout=hooks.subprocess.DEVNULL,
-            stderr=hooks.subprocess.DEVNULL,
-        )
+        assert mock_http.get.await_count == 1
+        assert "start it manually" in caplog.text
