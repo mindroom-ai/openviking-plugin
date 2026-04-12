@@ -23,6 +23,10 @@ class OpenVikingClient:
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(10.0, connect=5.0),
+            headers={
+                "X-OpenViking-Account": "default",
+                "X-OpenViking-User": "mindroom",
+            },
         )
 
     async def close(self) -> None:
