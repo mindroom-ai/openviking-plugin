@@ -48,7 +48,17 @@ class TestFind:
         mock_resp = MagicMock()
         mock_resp.is_success = True
         mock_resp.json.return_value = {
-            "results": [{"uri": "viking://u/1", "content": "hello"}],
+            "memories": [
+                {
+                    "uri": "viking://u/1",
+                    "content": "hello",
+                    "score": 0.9,
+                    "level": "summary",
+                    "category": "general",
+                }
+            ],
+            "resources": [],
+            "skills": [],
         }
         mock_resp.raise_for_status = MagicMock()
         with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
@@ -110,16 +120,49 @@ class TestSession:
 class TestMemoryOps:
     @pytest.mark.asyncio
     async def test_store_memory(self, client: OpenVikingClient) -> None:
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"uri": "viking://user/memories/test/abc"}
-        mock_resp.raise_for_status = MagicMock()
-        with patch.object(client._http, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
+        create_resp = MagicMock()
+        create_resp.json.return_value = {"session_id": "memory-deadbeefcafe"}
+        create_resp.raise_for_status = MagicMock()
+
+        add_message_resp = MagicMock()
+        add_message_resp.json.return_value = {"ok": True}
+        add_message_resp.raise_for_status = MagicMock()
+
+        commit_resp = MagicMock()
+        commit_resp.json.return_value = {"archive_uri": "viking://archive/memory-deadbeefcafe"}
+        commit_resp.raise_for_status = MagicMock()
+
+        mock_uuid = MagicMock()
+        mock_uuid.hex = "deadbeefcafe1234567890"
+
+        with (
+            patch("openviking.client.uuid.uuid4", return_value=mock_uuid),
+            patch.object(
+                client._http,
+                "post",
+                new_callable=AsyncMock,
+                side_effect=[create_resp, add_message_resp, commit_resp],
+            ) as mock_post,
+        ):
             result = await client.store_memory("viking://user/memories/test/abc", "content")
-            mock_post.assert_called_once_with(
-                "/api/v1/content/write",
-                json={"uri": "viking://user/memories/test/abc", "content": "content"},
-            )
-            assert result is not None
+
+        assert result == {
+            "session_id": "memory-deadbeefcafe",
+            "archive_uri": "viking://archive/memory-deadbeefcafe",
+        }
+        assert mock_post.call_count == 3
+        assert mock_post.call_args_list[0].args == ("/api/v1/sessions",)
+        assert mock_post.call_args_list[0].kwargs["json"] == {
+            "session_id": "memory-deadbeefcafe",
+            "auto_create": True,
+        }
+        assert mock_post.call_args_list[1].args == ("/api/v1/sessions/memory-deadbeefcafe/messages",)
+        assert mock_post.call_args_list[1].kwargs["json"] == {
+            "role": "user",
+            "parts": [{"type": "text", "text": "content"}],
+        }
+        assert mock_post.call_args_list[2].args == ("/api/v1/sessions/memory-deadbeefcafe/commit",)
+        assert mock_post.call_args_list[2].kwargs["json"] is None
 
     @pytest.mark.asyncio
     async def test_delete_memory_success(self, client: OpenVikingClient) -> None:
@@ -129,7 +172,7 @@ class TestMemoryOps:
             assert await client.delete_memory("viking://user/memories/test/abc") is True
             mock_delete.assert_called_once_with(
                 "/api/v1/fs",
-                params={"path": "viking://user/memories/test/abc"},
+                params={"uri": "viking://user/memories/test/abc"},
             )
 
     @pytest.mark.asyncio
@@ -147,13 +190,13 @@ class TestMemoryOps:
     @pytest.mark.asyncio
     async def test_ls(self, client: OpenVikingClient) -> None:
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {"entries": [{"uri": "viking://u/1"}]}
+        mock_resp.json.return_value = {"resources": [{"uri": "viking://u/1"}]}
         mock_resp.raise_for_status = MagicMock()
         with patch.object(client._http, "get", new_callable=AsyncMock, return_value=mock_resp) as mock_get:
             entries = await client.ls("viking://user/memories/")
             mock_get.assert_called_once_with(
                 "/api/v1/fs/ls",
-                params={"path": "viking://user/memories/"},
+                params={"uri": "viking://user/memories/"},
             )
             assert len(entries) == 1
 

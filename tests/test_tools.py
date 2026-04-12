@@ -46,20 +46,28 @@ class TestMemoryStore:
     @pytest.mark.asyncio
     async def test_stores_memory(self) -> None:
         mock_client = AsyncMock()
-        mock_client.store_memory.return_value = {"uri": "viking://user/memories/general/abc123"}
+        mock_client.store_memory.return_value = {
+            "session_id": "memory-abc123",
+            "archive_uri": "viking://archive/general/abc123",
+        }
         with patch("openviking.tools.get_client", return_value=mock_client):
             result = json.loads(await memory_store("important fact"))
             assert result["status"] == "ok"
             assert result["action"] == "store"
-            assert "viking://user/memories/general/" in result["uri"]
+            assert result["session_id"] == "memory-abc123"
+            assert result["uri"] == "viking://archive/general/abc123"
 
     @pytest.mark.asyncio
     async def test_stores_with_category(self) -> None:
         mock_client = AsyncMock()
-        mock_client.store_memory.return_value = {"uri": "viking://user/memories/work/abc123"}
+        mock_client.store_memory.return_value = {
+            "session_id": "memory-work123",
+            "archive_uri": "viking://archive/work/abc123",
+        }
         with patch("openviking.tools.get_client", return_value=mock_client):
             result = json.loads(await memory_store("work fact", category="work"))
             assert result["status"] == "ok"
+            assert result["session_id"] == "memory-work123"
             assert "work" in result["uri"]
 
     @pytest.mark.asyncio

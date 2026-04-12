@@ -80,7 +80,12 @@ class OpenVikingMemoryTools(Toolkit):
         if result is None:
             return _payload("error", message="Failed to store memory")
 
-        return _payload("ok", action="store", uri=uri)
+        return _payload(
+            "ok",
+            action="store",
+            session_id=result.get("session_id", ""),
+            uri=result.get("archive_uri", uri),
+        )
 
     @tool(name="memory_forget", description="Find and delete memories matching a query")
     async def memory_forget(self, query: str) -> str:

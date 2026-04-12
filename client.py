@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 import httpx
@@ -88,22 +89,45 @@ class OpenVikingClient:
         result = await self._post("/api/v1/search/find", json=body)
         if result is None:
             return []
-        return result.get("results", result.get("memories", []))
+        memories = result.get("memories")
+        if isinstance(memories, list):
+            return memories
+        results = result.get("results")
+        return results if isinstance(results, list) else []
 
     async def store_memory(self, uri: str, content: str) -> dict[str, Any] | None:
-        return await self._post(
-            "/api/v1/content/write",
-            json={"uri": uri, "content": content},
-        )
+        del uri
+
+        session_id = f"memory-{uuid.uuid4().hex[:12]}"
+        session = await self.create_session(session_id)
+        if session is None:
+            return None
+
+        message = await self.add_message(session_id, "user", content)
+        if message is None:
+            return None
+
+        commit = await self.commit_session(session_id)
+        if commit is None:
+            return None
+
+        return {
+            "session_id": session_id,
+            "archive_uri": commit.get("archive_uri") or commit.get("uri"),
+        }
 
     async def delete_memory(self, uri: str) -> bool:
-        return await self._delete("/api/v1/fs", params={"path": uri})
+        return await self._delete("/api/v1/fs", params={"uri": uri})
 
     async def ls(self, uri: str) -> list[dict[str, Any]]:
-        result = await self._get("/api/v1/fs/ls", params={"path": uri})
+        result = await self._get("/api/v1/fs/ls", params={"uri": uri})
         if result is None:
             return []
-        return result.get("entries", result.get("resources", []))
+        resources = result.get("resources")
+        if isinstance(resources, list):
+            return resources
+        entries = result.get("entries")
+        return entries if isinstance(entries, list) else []
 
     # ------------------------------------------------------------------
     # Internal helpers
