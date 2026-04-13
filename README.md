@@ -81,16 +81,14 @@ Create `~/.openviking/ov.conf`:
   "embedding": {
     "dense": {
       "provider": "openai",
-      "model": "your-embedding-model",
-      "dimension": 768,
-      "api_base": "http://your-llm-proxy/v1",
+      "model": "text-embedding-3-small",
+      "dimension": 1536,
       "api_key": "$OPENAI_API_KEY"
     }
   },
   "vlm": {
     "provider": "openai",
-    "model": "your-chat-model",
-    "api_base": "http://your-llm-proxy/v1",
+    "model": "gpt-4o-mini",
     "api_key": "$OPENAI_API_KEY",
     "temperature": 0.0,
     "max_concurrent": 10
@@ -101,8 +99,8 @@ Create `~/.openviking/ov.conf`:
 }
 ```
 
-- **`embedding`** — required for vector search. Any OpenAI-compatible embedding API works.
-- **`vlm`** — required for automatic memory extraction. Without this, sessions commit but no memories are extracted. Any OpenAI-compatible chat completion API works.
+- **`embedding`** — required for vector search. Any OpenAI-compatible embedding API works. Set `api_base` if using a proxy or non-OpenAI provider.
+- **`vlm`** — required for automatic memory extraction. Without this, sessions commit but no memories are extracted. Any OpenAI-compatible chat completion API works. Set `api_base` if using a proxy or non-OpenAI provider.
 - **`auth_mode: "trusted"`** — localhost auth via headers. The plugin sends `X-OpenViking-Account: default` and `X-OpenViking-User: mindroom` automatically.
 - **`$OPENAI_API_KEY`** — env vars in the config are expanded at load time.
 
