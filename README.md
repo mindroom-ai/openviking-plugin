@@ -107,7 +107,8 @@ Create `~/.openviking/ov.conf`:
 ### 3. Install the plugin
 
 ```bash
-cp -r openviking ~/.mindroom/plugins/openviking
+cd ~/.mindroom/plugins/
+git clone https://github.com/mindroom-ai/openviking-plugin.git openviking
 ```
 
 ### 4. Add to `config.yaml`
