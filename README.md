@@ -1,107 +1,163 @@
-# OpenViking
+# 🧠 OpenViking Plugin for MindRoom
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-plugins-blue)](https://docs.mindroom.chat/plugins/)
-[![Hooks](https://img.shields.io/badge/docs-hooks-blue)](https://docs.mindroom.chat/hooks/)
+> Long-term memory for MindRoom agents via [OpenViking](https://github.com/volcengine/OpenViking) — an agent-native context database with tiered context loading, automatic session memory extraction, and directory-recursive retrieval.
 
-<img src="https://media.githubusercontent.com/media/mindroom-ai/mindroom/refs/heads/main/frontend/public/logo.png" alt="MindRoom Logo" align="right" width="120" />
+**License:** MIT (plugin) · AGPL-3.0 (OpenViking server, communicated via HTTP service boundary)
 
-Long-term memory for [MindRoom](https://github.com/mindroom-ai/mindroom) agents via [OpenViking](https://github.com/volcengine/OpenViking).
+## What It Does
 
-OpenViking is a context database that provides tiered context loading (L0/L1/L2), automatic session memory extraction, and directory-recursive retrieval. This plugin connects MindRoom to an OpenViking server over HTTP, giving agents persistent memory that survives context compaction and service restarts.
-
-## Features
-
-- **Auto-recall** — automatically injects relevant memories into each prompt via `message:enrich`
-- **Session archiving** — commits conversation turns to OpenViking after each response, triggering async memory extraction at configurable token thresholds
-- **Pre-compaction archive** — saves messages to OpenViking before MindRoom compacts them away, ensuring no conversation history is permanently lost
-- **Session initialization** — creates an OpenViking session for each thread on first interaction
-- **Memory tools** — explicit `memory_recall`, `memory_store`, and `memory_forget` tools for agent-driven memory management
-- **Graceful degradation** — if the OpenViking server is unreachable, hooks return empty results and tools return error messages without crashing
+Gives MindRoom agents persistent memory that survives context compaction and service restarts. Memories are automatically extracted from conversations (profile, preferences, entities, events, cases, patterns) and recalled when relevant.
 
 ## How It Works
 
-1. When a new thread starts, `init_session` creates an OpenViking session keyed by `room_id:thread_id`.
-2. Before each prompt, `recall_memories` queries OpenViking for memories relevant to the user's latest message and injects them as context.
-3. After each response, `archive_turn` sends the conversation turn to OpenViking. When accumulated tokens cross the commit threshold, it triggers `commit()` which archives messages and runs async memory extraction (profile, preferences, entities, events, cases, patterns).
-4. Before MindRoom compacts conversation history, `pre_compaction_archive` saves all messages being compacted to OpenViking with a synchronous commit, ensuring nothing is lost.
-5. Agents can also explicitly search, store, and delete memories using the provided tools.
+| Hook | Event | Priority | Description |
+|------|-------|----------|-------------|
+| `openviking-init-session` | `session:started` | 10 | Creates an OpenViking session keyed by `room_id:thread_id` |
+| `openviking-recall` | `message:enrich` | 30 | Queries OpenViking before each prompt, injects relevant memories as context |
+| `openviking-archive-turn` | `message:after_response` | 50 | Sends conversation turns after each response; triggers `commit()` at token threshold for async memory extraction |
+| `openviking-pre-compaction` | `compaction:before` | 10 | Saves messages synchronously before MindRoom compacts the context window |
 
 ## Agent Tools
 
-| Tool | Purpose |
-|------|---------|
-| `memory_recall(query)` | Search long-term memory for information relevant to the query |
-| `memory_store(content, category="general")` | Store a new memory in the specified category |
-| `memory_forget(query)` | Find and delete memories matching the query |
-
-## Hooks
-
-| Hook | Event | Priority | Purpose |
-|------|-------|----------|---------|
-| `openviking-init-session` | `session:started` | 10 | Initialize OpenViking session for the thread |
-| `openviking-recall` | `message:enrich` | 30 | Auto-inject relevant memories before each prompt |
-| `openviking-archive-turn` | `message:after_response` | 50 | Archive conversation turns, auto-commit at token threshold |
-| `openviking-pre-compaction` | `compaction:before` | 10 | Save messages to OpenViking before compaction discards them |
-
-## Configuration
-
-Plugin settings in `config.yaml`:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `url` | `http://localhost:1933` | OpenViking server URL |
-| `recall_max_tokens` | `2000` | Maximum tokens for injected memories per prompt |
-| `commit_token_threshold` | `8000` | Accumulated tokens before triggering async commit |
-
-Environment variable overrides:
-
-| Variable | Description |
-|----------|-------------|
-| `OPENVIKING_URL` | Override the server URL |
-| `OPENVIKING_RECALL_MAX_TOKENS` | Override the recall token budget |
-| `OPENVIKING_COMMIT_TOKEN_THRESHOLD` | Override the commit threshold |
-
-Example:
-
-```yaml
-plugins:
-  - path: plugins/openviking
-    settings:
-      url: http://localhost:1933
-      recall_max_tokens: 2000
-      commit_token_threshold: 8000
-```
-
-## Prerequisites
-
-An [OpenViking](https://github.com/volcengine/OpenViking) server must be running and accessible at the configured URL. Quick start:
-
-```bash
-pip install openviking
-openviking-server --port 1933
-```
-
-Configure OpenViking's VLM and embedding providers in `~/.openviking/ov.conf`.
+| Tool | Description |
+|------|-------------|
+| `memory_recall(query)` | Search long-term memory for relevant context |
+| `memory_store(content, category="general")` | Explicitly store a memory (creates session → adds message → commits) |
+| `memory_forget(query)` | Find and delete memories matching a query |
 
 ## Setup
 
-1. Copy this plugin to `~/.mindroom/plugins/openviking`.
-2. Add the plugin to `config.yaml`:
-   ```yaml
-   plugins:
-     - path: plugins/openviking
-   ```
-3. Add `openviking` tools to the agent's tools list:
-   ```yaml
-   tools:
-     - memory_recall
-     - memory_store
-     - memory_forget
-   ```
-4. Ensure the OpenViking server is running at the configured URL.
-5. Restart MindRoom.
+### 1. Install the Plugin
 
-## License
+```bash
+cd ~/.mindroom-chat/plugins/
+git clone https://git.nijho.lt/basnijholt/openviking-plugin.git openviking
+```
 
-[MIT](LICENSE)
+### 2. Configure MindRoom
+
+Add to your `config.yaml`:
+
+```yaml
+plugins:
+  - path: ~/.mindroom-chat/plugins/openviking
+
+agents:
+  my-agent:
+    tools:
+      - openviking   # adds memory_recall, memory_store, memory_forget
+```
+
+### 3. Start the OpenViking Server
+
+⚠️ **Python 3.14 is not supported** — OpenViking has Pydantic V1 compatibility issues. Use Python 3.13.
+
+⚠️ **`openviking-server` and `uvicorn.run()` exit silently** — you must use `uvicorn` CLI with the `--factory` flag.
+
+```bash
+OPENAI_API_KEY=<your-litellm-proxy-key> \
+  uvx --python 3.13 --with openviking --with litellm \
+  uvicorn openviking.server.app:create_app --factory \
+  --host 127.0.0.1 --port 1933
+```
+
+Run this in a tmux session or systemd service so it stays up.
+
+### 4. Configure OpenViking
+
+Create `~/.openviking/ov.conf`:
+
+```json
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 1933,
+    "auth_mode": "trusted"
+  },
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "model": "your-embedding-model",
+      "dimension": 768,
+      "api_base": "http://your-litellm-proxy:4000/v1",
+      "api_key": "$OPENAI_API_KEY"
+    }
+  },
+  "vlm": {
+    "provider": "openai",
+    "model": "your-llm-model",
+    "api_base": "http://your-litellm-proxy:4000/v1",
+    "api_key": "$OPENAI_API_KEY",
+    "temperature": 0.0,
+    "max_concurrent": 10
+  },
+  "storage": {
+    "workspace": "/home/you/.openviking/data"
+  }
+}
+```
+
+**Key points:**
+- **`embedding`** — required for vector search. Any OpenAI-compatible embedding API works.
+- **`vlm`** — required for automatic memory extraction from sessions. Without this, sessions commit but no memories are extracted ("LLM not available, skipping memory extraction"). Any OpenAI-compatible chat completion API works (routed via LiteLLM).
+- **`auth_mode: "trusted"`** — localhost auth via HTTP headers. The plugin sends `X-OpenViking-Account: default` and `X-OpenViking-User: mindroom` headers automatically.
+- **`$OPENAI_API_KEY`** — environment variables in the config are expanded at load time. Set the env var when starting the server.
+
+### 5. Verify
+
+```bash
+# Check server health
+curl http://127.0.0.1:1933/api/v1/health
+
+# Test memory store + recall
+curl -X POST http://127.0.0.1:1933/api/v1/sessions \
+  -H 'Content-Type: application/json' \
+  -H 'X-OpenViking-Account: default' \
+  -H 'X-OpenViking-User: mindroom' \
+  -d '{"session_id": "test-session"}'
+```
+
+## Plugin Configuration
+
+Environment variables (override defaults):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENVIKING_URL` | `http://localhost:1933` | OpenViking server URL |
+| `OPENVIKING_RECALL_MAX_TOKENS` | `2000` | Max tokens for recalled memory context |
+| `OPENVIKING_COMMIT_TOKEN_THRESHOLD` | `8000` | Token count that triggers session commit |
+
+## Architecture
+
+```
+MindRoom Agent
+  ├── hooks.py      → lifecycle hooks (session init, recall, archive, compaction)
+  ├── tools.py      → agent-callable tools (recall, store, forget)
+  ├── client.py     → async HTTP client (httpx → OpenViking API)
+  ├── config.py     → env var configuration
+  └── mindroom.plugin.json
+          │
+          ▼ HTTP (service boundary — AGPL-clean)
+  OpenViking Server (port 1933)
+  ├── Session management (create → messages → commit → extract)
+  ├── Memory extraction (8 categories via LLM)
+  ├── Vector search (embeddings)
+  └── Filesystem storage (~/.openviking/data/)
+```
+
+The plugin communicates with OpenViking exclusively over HTTP. The OpenViking server (AGPL-3.0) runs as a separate process. This plugin (MIT) never imports or links OpenViking code.
+
+## Memory Categories
+
+OpenViking automatically extracts memories into 8 categories:
+
+| Category | Type | Description |
+|----------|------|-------------|
+| Profile | User | Bio, role, background |
+| Preferences | User | Settings, habits, style |
+| Entities | User | Projects, people, concepts |
+| Events | User | Decisions, milestones |
+| Cases | Agent | Problem → solution pairs |
+| Patterns | Agent | Reusable processes |
+| Tools | Skill | Tool usage and optimization |
+| Skills | Skill | Workflow and strategy |
