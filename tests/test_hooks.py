@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from mindroom.hooks.decorators import get_hook_metadata
 
 import openviking.hooks as hooks
 from openviking.hooks import (
@@ -31,24 +32,32 @@ from openviking.hooks import (
 
 class TestHookMetadata:
     def test_recall_memories_metadata(self) -> None:
-        assert recall_memories._hook_event == "message:enrich"
-        assert recall_memories._hook_name == "openviking-recall"
-        assert recall_memories._hook_priority == 30
+        metadata = get_hook_metadata(recall_memories)
+        assert metadata is not None
+        assert metadata.event_name == "message:enrich"
+        assert metadata.hook_name == "openviking-recall"
+        assert metadata.priority == 30
 
     def test_archive_turn_metadata(self) -> None:
-        assert archive_turn._hook_event == "message:after_response"
-        assert archive_turn._hook_name == "openviking-archive-turn"
-        assert archive_turn._hook_priority == 50
+        metadata = get_hook_metadata(archive_turn)
+        assert metadata is not None
+        assert metadata.event_name == "message:after_response"
+        assert metadata.hook_name == "openviking-archive-turn"
+        assert metadata.priority == 50
 
     def test_pre_compaction_metadata(self) -> None:
-        assert pre_compaction_archive._hook_event == "compaction:before"
-        assert pre_compaction_archive._hook_name == "openviking-pre-compaction"
-        assert pre_compaction_archive._hook_priority == 10
+        metadata = get_hook_metadata(pre_compaction_archive)
+        assert metadata is not None
+        assert metadata.event_name == "compaction:before"
+        assert metadata.hook_name == "openviking-pre-compaction"
+        assert metadata.priority == 10
 
     def test_init_session_metadata(self) -> None:
-        assert init_session._hook_event == "session:started"
-        assert init_session._hook_name == "openviking-init-session"
-        assert init_session._hook_priority == 10
+        metadata = get_hook_metadata(init_session)
+        assert metadata is not None
+        assert metadata.event_name == "session:started"
+        assert metadata.hook_name == "openviking-init-session"
+        assert metadata.priority == 10
 
 
 # ------------------------------------------------------------------
