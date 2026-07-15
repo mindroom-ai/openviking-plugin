@@ -6,36 +6,27 @@ import logging
 from typing import Any
 
 import httpx
-from mindroom.hooks import EnrichmentItem, hook
+from agno.models.message import Message
+from mindroom.hooks import (
+    AfterResponseContext,
+    CompactionHookContext,
+    EnrichmentItem,
+    MessageEnrichContext,
+    SessionHookContext,
+    hook,
+)
 
 from .client import get_client
 from .config import COMMIT_TOKEN_THRESHOLD, OPENVIKING_URL, RECALL_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 _AUTO_START_ATTEMPTED = False
+_SESSION_PENDING_TOKENS: dict[str, int] = {}
 
 
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate: ~4 chars per token."""
     return len(text) // 4
-
-
-def _extract_last_user_text(messages: list[dict[str, Any]]) -> str | None:
-    """Extract the text content from the most recent user message."""
-    for msg in reversed(messages):
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    return part.get("text", "")
-                if isinstance(part, str):
-                    return part
-        break
-    return None
 
 
 def _format_memories(memories: list[dict[str, Any]], max_tokens: int) -> str:
@@ -56,9 +47,9 @@ def _format_memories(memories: list[dict[str, Any]], max_tokens: int) -> str:
     return "\n".join(lines)
 
 
-def _extract_text(msg: dict[str, Any]) -> str:
-    """Extract plain text from a message dict."""
-    content = msg.get("content", "")
+def _extract_text(message: Message) -> str:
+    """Extract plain text from one Agno message."""
+    content = message.content
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -69,14 +60,12 @@ def _extract_text(msg: dict[str, Any]) -> str:
             elif isinstance(part, str):
                 parts.append(part)
         return "\n".join(parts)
-    return str(content)
+    return "" if content is None else str(content)
 
 
-def _session_key(ctx: Any) -> str:
-    """Derive a session key from context identifiers."""
-    thread = getattr(ctx, "thread_id", None) or "default"
-    room = getattr(ctx, "room_id", None) or "global"
-    return f"{room}:{thread}"
+def _session_key(room_id: str, thread_id: str | None) -> str:
+    """Derive one stable OpenViking session key from a Matrix target."""
+    return f"{room_id}:{thread_id or 'default'}"
 
 
 async def _ensure_server_running() -> None:
@@ -111,9 +100,9 @@ async def _ensure_server_running() -> None:
     priority=10,
     timeout_ms=5000,
 )
-async def init_session(ctx: Any) -> None:
+async def init_session(ctx: SessionHookContext) -> None:
     """Initialize an OpenViking session when a new MindRoom session starts."""
-    session_id = _session_key(ctx)
+    session_id = _session_key(ctx.room_id, ctx.thread_id)
     await _ensure_server_running()
     client = get_client()
     result = await client.create_session(session_id)
@@ -127,10 +116,9 @@ async def init_session(ctx: Any) -> None:
     priority=30,
     timeout_ms=5000,
 )
-async def recall_memories(ctx: Any) -> list[EnrichmentItem]:
+async def recall_memories(ctx: MessageEnrichContext) -> list[EnrichmentItem]:
     """Auto-recall relevant memories and inject them before each prompt."""
-    messages = getattr(ctx, "messages", [])
-    user_text = _extract_last_user_text(messages)
+    user_text = ctx.envelope.body.strip()
     if not user_text:
         return []
 
@@ -158,36 +146,24 @@ async def recall_memories(ctx: Any) -> list[EnrichmentItem]:
     priority=50,
     timeout_ms=10000,
 )
-async def archive_turn(ctx: Any) -> None:
+async def archive_turn(ctx: AfterResponseContext) -> None:
     """Archive the latest conversation turn to OpenViking after each response."""
-    messages = getattr(ctx, "messages", [])
-    if not messages:
-        return
-
-    session_id = _session_key(ctx)
+    envelope = ctx.result.envelope
+    user_text = envelope.body
+    assistant_text = ctx.result.response_text
+    session_id = _session_key(envelope.room_id, envelope.target.resolved_thread_id)
     client = get_client()
 
-    # Find the last user and assistant messages to archive
-    user_msg: dict[str, Any] | None = None
-    assistant_msg: dict[str, Any] | None = None
-    for msg in reversed(messages):
-        role = msg.get("role")
-        if role == "assistant" and assistant_msg is None:
-            assistant_msg = msg
-        elif role == "user" and user_msg is None:
-            user_msg = msg
-        if user_msg and assistant_msg:
-            break
+    await client.add_message(session_id, "user", user_text)
+    await client.add_message(session_id, "assistant", assistant_text)
 
-    if user_msg:
-        await client.add_message(session_id, "user", _extract_text(user_msg))
-    if assistant_msg:
-        await client.add_message(session_id, "assistant", _extract_text(assistant_msg))
-
-    # Commit if accumulated tokens exceed threshold
-    total_text = "".join(_extract_text(m) for m in messages)
-    if _estimate_tokens(total_text) >= COMMIT_TOKEN_THRESHOLD:
-        await client.commit_session(session_id)
+    pending_tokens = _SESSION_PENDING_TOKENS.get(session_id, 0)
+    pending_tokens += _estimate_tokens(user_text) + _estimate_tokens(assistant_text)
+    _SESSION_PENDING_TOKENS[session_id] = pending_tokens
+    if pending_tokens >= COMMIT_TOKEN_THRESHOLD:
+        result = await client.commit_session(session_id)
+        if result is not None and _SESSION_PENDING_TOKENS.get(session_id) == pending_tokens:
+            _SESSION_PENDING_TOKENS.pop(session_id, None)
 
 
 @hook(
@@ -196,19 +172,20 @@ async def archive_turn(ctx: Any) -> None:
     priority=10,
     timeout_ms=30000,
 )
-async def pre_compaction_archive(ctx: Any) -> None:
+async def pre_compaction_archive(ctx: CompactionHookContext) -> None:
     """Archive all messages to OpenViking before MindRoom compacts them away."""
-    messages = getattr(ctx, "messages", [])
-    if not messages:
+    if not ctx.messages:
         return
 
-    session_id = getattr(ctx, "session_id", None) or _session_key(ctx)
+    session_id = _session_key(ctx.room_id, ctx.thread_id)
     client = get_client()
 
-    for msg in messages:
-        role = msg.get("role")
+    for message in ctx.messages:
+        role = message.role
         if role in ("user", "assistant"):
-            await client.add_message(session_id, role, _extract_text(msg))
+            await client.add_message(session_id, role, _extract_text(message))
 
     # Synchronous commit to ensure nothing is lost before compaction
-    await client.commit_session(session_id, wait=True)
+    result = await client.commit_session(session_id, wait=True)
+    if result is not None:
+        _SESSION_PENDING_TOKENS.pop(session_id, None)
