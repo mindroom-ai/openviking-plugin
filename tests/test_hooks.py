@@ -245,6 +245,35 @@ class TestArchiveTurn:
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("body", "response_text", "expected_calls"),
+        [
+            ("", "", []),
+            ("", "hello", [call("r1:t1", "assistant", "hello")]),
+            ("hi", "", [call("r1:t1", "user", "hi")]),
+        ],
+    )
+    async def test_skips_empty_turn_parts(
+        self,
+        tmp_path: Path,
+        body: str,
+        response_text: str,
+        expected_calls: list[object],
+    ) -> None:
+        mock_client = AsyncMock()
+        pending: dict[str, int] = {}
+        with (
+            patch("openviking.hooks.get_client", return_value=mock_client),
+            patch.object(hooks, "_SESSION_PENDING_TOKENS", pending),
+        ):
+            await archive_turn(_after_response_context(tmp_path, body=body, response_text=response_text))
+
+        assert mock_client.add_message.await_args_list == expected_calls
+        mock_client.commit_session.assert_not_awaited()
+        if not expected_calls:
+            assert pending == {}
+
+    @pytest.mark.asyncio
     async def test_commits_after_accumulated_token_threshold(self, tmp_path: Path) -> None:
         mock_client = AsyncMock()
         mock_client.commit_session.return_value = {"ok": True}

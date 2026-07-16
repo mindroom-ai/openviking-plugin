@@ -151,11 +151,16 @@ async def archive_turn(ctx: AfterResponseContext) -> None:
     envelope = ctx.result.envelope
     user_text = envelope.body
     assistant_text = ctx.result.response_text
+    if not user_text and not assistant_text:
+        return
+
     session_id = _session_key(envelope.room_id, envelope.target.resolved_thread_id)
     client = get_client()
 
-    await client.add_message(session_id, "user", user_text)
-    await client.add_message(session_id, "assistant", assistant_text)
+    if user_text:
+        await client.add_message(session_id, "user", user_text)
+    if assistant_text:
+        await client.add_message(session_id, "assistant", assistant_text)
 
     pending_tokens = _SESSION_PENDING_TOKENS.get(session_id, 0)
     pending_tokens += _estimate_tokens(user_text) + _estimate_tokens(assistant_text)
