@@ -4,6 +4,11 @@
 [![Docs](https://img.shields.io/badge/docs-plugins-blue)](https://docs.mindroom.chat/plugins/)
 [![Hooks](https://img.shields.io/badge/docs-hooks-blue)](https://docs.mindroom.chat/hooks/)
 
+<picture>
+  <source media="(prefers-reduced-motion: no-preference)" srcset="https://raw.githubusercontent.com/mindroom-ai/mindroom/main/assets/logo/logo-mark-animated.svg" />
+  <img src="https://raw.githubusercontent.com/mindroom-ai/mindroom/main/assets/logo/logo-mark.svg" alt="MindRoom Logo" align="right" width="120" />
+</picture>
+
 Long-term memory for [MindRoom](https://github.com/mindroom-ai/mindroom) agents via [OpenViking](https://github.com/volcengine/OpenViking) — an agent-native context database with tiered context loading, automatic session memory extraction, and directory-recursive retrieval.
 
 Memories are automatically extracted from conversations (profile, preferences, entities, events, cases, patterns) and recalled when relevant. They survive context compaction and service restarts.
