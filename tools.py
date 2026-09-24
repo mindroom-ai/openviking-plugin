@@ -10,6 +10,7 @@ from agno.utils.log import logger
 from mindroom.tool_system.declarations import (
     SetupType,
     ToolCategory,
+    ToolFileAccess,
     ToolStatus,
 )
 from mindroom.tool_system.registration import register_tool_with_metadata
@@ -120,6 +121,7 @@ class OpenVikingMemoryTools(Toolkit):
 
 @register_tool_with_metadata(
     name="openviking",
+    file_access=ToolFileAccess.NONE,
     display_name="OpenViking Memory",
     description="Search, store, and delete long-term memories in OpenViking.",
     category=ToolCategory.PRODUCTIVITY,
