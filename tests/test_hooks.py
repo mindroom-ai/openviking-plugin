@@ -120,7 +120,6 @@ def _after_response_context(
 def _compaction_context(tmp_path: Path, transcript: tuple[TranscriptLine, ...]) -> CompactionHookContext:
     return CompactionHookContext(
         **_base_kwargs(tmp_path, "compaction:before"),
-        messages=[],
         agent_name="code",
         scope=HistoryScope(kind="agent", scope_id="code"),
         room_id="r1",
