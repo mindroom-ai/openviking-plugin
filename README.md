@@ -61,9 +61,6 @@ Plugin settings via environment variables:
 
 ## Install
 
-The plugin needs **MindRoom the first MindRoom release after v2026.10.625 or later**, whose compaction hooks carry the conversation as `ctx.transcript`.
-On an older MindRoom it refuses to load and names the release it needs.
-
 Vendor this plugin with the MindRoom CLI:
 
 ```bash

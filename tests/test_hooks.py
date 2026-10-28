@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import dataclasses
-import importlib.util
 import logging
-import re
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import httpx
-import mindroom.plugin_api
 import pytest
 from mindroom.config.main import Config
 from mindroom.constants import RuntimePaths
@@ -123,11 +118,9 @@ def _after_response_context(
 
 
 def _compaction_context(tmp_path: Path, transcript: tuple[TranscriptLine, ...]) -> CompactionHookContext:
-    # MindRoom requires `messages` until it removes the field, so these tests pass on releases before and after.
-    has_messages = "messages" in {field.name for field in dataclasses.fields(CompactionHookContext)}
     return CompactionHookContext(
         **_base_kwargs(tmp_path, "compaction:before"),
-        **({"messages": []} if has_messages else {}),
+        messages=[],
         agent_name="code",
         scope=HistoryScope(kind="agent", scope_id="code"),
         room_id="r1",
@@ -341,26 +334,6 @@ class TestPreCompactionArchive:
 
         mock_client.add_message.assert_not_awaited()
         mock_client.commit_session.assert_not_awaited()
-
-
-class TestMindRoomVersionGate:
-    @pytest.mark.parametrize("has_plugin_api", [True, False])
-    def test_refuses_to_load_without_transcript_line(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        has_plugin_api: bool,
-    ) -> None:
-        if has_plugin_api:
-            monkeypatch.delattr(mindroom.plugin_api, "TranscriptLine")
-        else:
-            monkeypatch.setitem(sys.modules, "mindroom.plugin_api", None)
-        spec = importlib.util.spec_from_file_location("openviking.hooks_on_older_mindroom", hooks.__file__)
-        assert spec is not None
-        assert spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-
-        with pytest.raises(ImportError, match=re.escape(hooks.MINIMUM_MINDROOM_RELEASE)):
-            spec.loader.exec_module(module)
 
 
 class TestInitSession:

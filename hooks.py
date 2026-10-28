@@ -6,33 +6,18 @@ import logging
 from typing import Any
 
 import httpx
+from mindroom.plugin_api import (
+    AfterResponseContext,
+    CompactionHookContext,
+    EnrichmentItem,
+    MessageEnrichContext,
+    SessionHookContext,
+    TranscriptLine,
+    hook,
+)
 
 from .client import get_client
 from .config import COMMIT_TOKEN_THRESHOLD, OPENVIKING_URL, RECALL_MAX_TOKENS
-
-MINIMUM_MINDROOM_RELEASE = "the first MindRoom release after v2026.10.625"
-_NEEDS_NEWER_MINDROOM = (
-    f"openviking needs MindRoom {MINIMUM_MINDROOM_RELEASE} or later, "
-    "whose compaction hooks carry the conversation as `ctx.transcript`"
-)
-
-# An older MindRoom lacks `mindroom.plugin_api` or its `TranscriptLine`, and its compaction hooks carry no transcript
-# for the pre-compaction archive to read. MindRoom has no plugin-API version marker, so the plugin refuses to load
-# when either is missing.
-try:
-    from mindroom.plugin_api import (
-        AfterResponseContext,
-        CompactionHookContext,
-        EnrichmentItem,
-        MessageEnrichContext,
-        SessionHookContext,
-        TranscriptLine,
-        hook,
-    )
-except ImportError as exc:
-    if exc.name != "mindroom.plugin_api":
-        raise
-    raise ImportError(_NEEDS_NEWER_MINDROOM) from exc
 
 logger = logging.getLogger(__name__)
 _AUTO_START_ATTEMPTED = False
