@@ -17,7 +17,7 @@ Memories are automatically extracted from conversations (profile, preferences, e
 
 - Automatic memory recall — queries OpenViking before each prompt, injects relevant memories as context
 - Session archiving — sends conversation turns after each response, commits at token threshold for async memory extraction
-- Pre-compaction archive — saves the user messages and agent replies synchronously before MindRoom compacts the context window
+- Pre-compaction archive — saves the compacted conversation and any buffered turns synchronously before MindRoom compacts the context window
 - Session initialization — creates an OpenViking session keyed by `room_id:thread_id` on new threads
 - Agent memory tools — explicit search, store, and delete via toolkit
 - Graceful degradation — if the server is unreachable, hooks warn once and pass through
@@ -27,8 +27,8 @@ Memories are automatically extracted from conversations (profile, preferences, e
 1. On `session:started`, creates an OpenViking session keyed by `room_id:thread_id`.
 2. On `message:enrich`, queries OpenViking for memories relevant to the incoming message and injects them as context.
 3. On `message:after_response`, sends the conversation turn to OpenViking. When accumulated tokens exceed the commit threshold, triggers `commit()` which runs async memory extraction (8 categories: profile, preferences, entities, events, cases, patterns, tools, skills).
-4. On `compaction:before`, sends each user message and agent reply being compacted to OpenViking and synchronously commits the session before MindRoom compacts the context window.
-   It archives only the words people and the agent wrote, without the context MindRoom attaches to messages, so the memories this plugin recalled into a prompt are not archived again at each compaction.
+4. On `compaction:before`, sends each user and assistant line being compacted to OpenViking, with each user line prefixed by its sender's Matrix ID and, when the message carried one, display name, then synchronously commits the session, including turns buffered since the last commit, before MindRoom compacts the context window.
+   The lines leave out the context MindRoom attaches to messages, so the memories this plugin recalled are not archived again at each compaction, but they still include other agents' messages and MindRoom's own thread notes, such as the note that earlier messages were omitted.
 5. Agents can explicitly search, store, or delete memories via the toolkit.
 
 ## Tools (toolkit: `openviking`)
@@ -60,7 +60,7 @@ Plugin settings via environment variables:
 
 ## Install
 
-The plugin needs the MindRoom release named by `MINIMUM_MINDROOM_RELEASE` in `hooks.py` or later, whose compaction hooks carry the conversation as `ctx.transcript`.
+The plugin needs **MindRoom the first MindRoom release after v2026.10.625 or later**, whose compaction hooks carry the conversation as `ctx.transcript`.
 On an older MindRoom it refuses to load and names the release it needs.
 
 Vendor this plugin with the MindRoom CLI:

@@ -7,7 +7,6 @@ import importlib.util
 import logging
 import re
 import sys
-import types
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, call, patch
 
@@ -284,13 +283,13 @@ class TestArchiveTurn:
 
 class TestPreCompactionArchive:
     @pytest.mark.asyncio
-    async def test_archives_each_transcript_line_and_commits(self, tmp_path: Path) -> None:
+    async def test_archives_each_transcript_line_with_its_speaker_and_commits(self, tmp_path: Path) -> None:
         context = _compaction_context(
             tmp_path,
             (
-                TranscriptLine(role="user", sender="@alice:localhost", display_name="Alice", text="msg1"),
-                TranscriptLine(role="assistant", sender=None, display_name=None, text="msg2"),
-                TranscriptLine(role="user", sender="@bob:localhost", display_name=None, text="msg3"),
+                TranscriptLine(role="user", sender="@alice:localhost", display_name="Alice", text="I'll take it"),
+                TranscriptLine(role="assistant", sender=None, display_name=None, text="Noted"),
+                TranscriptLine(role="user", sender="@bob:localhost", display_name=None, text="I'll take it"),
             ),
         )
         mock_client = AsyncMock()
@@ -303,12 +302,41 @@ class TestPreCompactionArchive:
             await pre_compaction_archive(context)
 
         assert mock_client.add_message.await_args_list == [
-            call("r1:t1", "user", "msg1"),
-            call("r1:t1", "assistant", "msg2"),
-            call("r1:t1", "user", "msg3"),
+            call("r1:t1", "user", "Alice (@alice:localhost): I'll take it"),
+            call("r1:t1", "assistant", "Noted"),
+            call("r1:t1", "user", "@bob:localhost: I'll take it"),
         ]
         mock_client.commit_session.assert_awaited_once_with("r1:t1", wait=True)
         assert pending == {}
+
+    @pytest.mark.asyncio
+    async def test_commits_buffered_turns_when_transcript_is_empty(self, tmp_path: Path) -> None:
+        mock_client = AsyncMock()
+        mock_client.commit_session.return_value = {"ok": True}
+        pending: dict[str, int] = {}
+        with (
+            patch("openviking.hooks.get_client", return_value=mock_client),
+            patch.object(hooks, "_SESSION_PENDING_TOKENS", pending),
+        ):
+            await archive_turn(_after_response_context(tmp_path))
+            assert "r1:t1" in pending
+            await pre_compaction_archive(_compaction_context(tmp_path, ()))
+
+        assert mock_client.add_message.await_count == 2
+        mock_client.commit_session.assert_awaited_once_with("r1:t1", wait=True)
+        assert pending == {}
+
+    @pytest.mark.asyncio
+    async def test_skips_empty_transcript_without_buffered_turns(self, tmp_path: Path) -> None:
+        mock_client = AsyncMock()
+        with (
+            patch("openviking.hooks.get_client", return_value=mock_client),
+            patch.object(hooks, "_SESSION_PENDING_TOKENS", {}),
+        ):
+            await pre_compaction_archive(_compaction_context(tmp_path, ()))
+
+        mock_client.add_message.assert_not_awaited()
+        mock_client.commit_session.assert_not_awaited()
 
 
 class TestMindRoomVersionGate:
@@ -318,18 +346,14 @@ class TestMindRoomVersionGate:
         monkeypatch: pytest.MonkeyPatch,
         has_plugin_api: bool,
     ) -> None:
-        older_plugin_api: types.ModuleType | None = None
         if has_plugin_api:
-            older_plugin_api = types.ModuleType("mindroom.plugin_api")
-            for name in mindroom.plugin_api.__all__:
-                if name != "TranscriptLine":
-                    setattr(older_plugin_api, name, getattr(mindroom.plugin_api, name))
-        monkeypatch.setitem(sys.modules, "mindroom.plugin_api", older_plugin_api)
+            monkeypatch.delattr(mindroom.plugin_api, "TranscriptLine")
+        else:
+            monkeypatch.setitem(sys.modules, "mindroom.plugin_api", None)
         spec = importlib.util.spec_from_file_location("openviking.hooks_on_older_mindroom", hooks.__file__)
         assert spec is not None
         assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
-        module.__package__ = "openviking"
 
         with pytest.raises(ImportError, match=re.escape(hooks.MINIMUM_MINDROOM_RELEASE)):
             spec.loader.exec_module(module)

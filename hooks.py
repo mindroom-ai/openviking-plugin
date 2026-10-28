@@ -26,7 +26,7 @@ try:
         EnrichmentItem,
         MessageEnrichContext,
         SessionHookContext,
-        TranscriptLine,  # noqa: F401
+        TranscriptLine,
         hook,
     )
 except ImportError as exc:
@@ -60,6 +60,14 @@ def _format_memories(memories: list[dict[str, Any]], max_tokens: int) -> str:
         lines.append(line)
         total_tokens += line_tokens
     return "\n".join(lines)
+
+
+def _attributed_text(line: TranscriptLine) -> str:
+    """Prefix a user line with its sender, so lines from different people in one session stay apart."""
+    if line.sender is None:
+        return line.text
+    speaker = f"{line.display_name} ({line.sender})" if line.display_name else line.sender
+    return f"{speaker}: {line.text}"
 
 
 def _session_key(room_id: str, thread_id: str | None) -> str:
@@ -177,15 +185,15 @@ async def archive_turn(ctx: AfterResponseContext) -> None:
     timeout_ms=30000,
 )
 async def pre_compaction_archive(ctx: CompactionHookContext) -> None:
-    """Archive what was said to OpenViking before MindRoom compacts it away."""
-    if not ctx.transcript:
+    """Archive what was said to OpenViking and commit buffered turns before MindRoom compacts them away."""
+    session_id = _session_key(ctx.room_id, ctx.thread_id)
+    if not ctx.transcript and session_id not in _SESSION_PENDING_TOKENS:
         return
 
-    session_id = _session_key(ctx.room_id, ctx.thread_id)
     client = get_client()
 
     for line in ctx.transcript:
-        await client.add_message(session_id, line.role, line.text)
+        await client.add_message(session_id, line.role, _attributed_text(line))
 
     # Synchronous commit to ensure nothing is lost before compaction
     result = await client.commit_session(session_id, wait=True)
