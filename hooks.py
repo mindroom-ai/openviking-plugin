@@ -6,18 +6,33 @@ import logging
 from typing import Any
 
 import httpx
-from agno.models.message import Message
-from mindroom.hooks import (
-    AfterResponseContext,
-    CompactionHookContext,
-    EnrichmentItem,
-    MessageEnrichContext,
-    SessionHookContext,
-    hook,
-)
 
 from .client import get_client
 from .config import COMMIT_TOKEN_THRESHOLD, OPENVIKING_URL, RECALL_MAX_TOKENS
+
+MINIMUM_MINDROOM_RELEASE = "the first MindRoom release after v2026.10.625"
+_NEEDS_NEWER_MINDROOM = (
+    f"openviking needs MindRoom {MINIMUM_MINDROOM_RELEASE} or later, "
+    "whose compaction hooks carry the conversation as `ctx.transcript`"
+)
+
+# An older MindRoom lacks `mindroom.plugin_api` or its `TranscriptLine`, and its compaction hooks carry no transcript
+# for the pre-compaction archive to read. MindRoom has no plugin-API version marker, so the plugin refuses to load
+# when either is missing.
+try:
+    from mindroom.plugin_api import (
+        AfterResponseContext,
+        CompactionHookContext,
+        EnrichmentItem,
+        MessageEnrichContext,
+        SessionHookContext,
+        TranscriptLine,  # noqa: F401
+        hook,
+    )
+except ImportError as exc:
+    if exc.name != "mindroom.plugin_api":
+        raise
+    raise ImportError(_NEEDS_NEWER_MINDROOM) from exc
 
 logger = logging.getLogger(__name__)
 _AUTO_START_ATTEMPTED = False
@@ -45,22 +60,6 @@ def _format_memories(memories: list[dict[str, Any]], max_tokens: int) -> str:
         lines.append(line)
         total_tokens += line_tokens
     return "\n".join(lines)
-
-
-def _extract_text(message: Message) -> str:
-    """Extract plain text from one Agno message."""
-    content = message.content
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                parts.append(part.get("text", ""))
-            elif isinstance(part, str):
-                parts.append(part)
-        return "\n".join(parts)
-    return "" if content is None else str(content)
 
 
 def _session_key(room_id: str, thread_id: str | None) -> str:
@@ -178,17 +177,15 @@ async def archive_turn(ctx: AfterResponseContext) -> None:
     timeout_ms=30000,
 )
 async def pre_compaction_archive(ctx: CompactionHookContext) -> None:
-    """Archive all messages to OpenViking before MindRoom compacts them away."""
-    if not ctx.messages:
+    """Archive what was said to OpenViking before MindRoom compacts it away."""
+    if not ctx.transcript:
         return
 
     session_id = _session_key(ctx.room_id, ctx.thread_id)
     client = get_client()
 
-    for message in ctx.messages:
-        role = message.role
-        if role in ("user", "assistant"):
-            await client.add_message(session_id, role, _extract_text(message))
+    for line in ctx.transcript:
+        await client.add_message(session_id, line.role, line.text)
 
     # Synchronous commit to ensure nothing is lost before compaction
     result = await client.commit_session(session_id, wait=True)

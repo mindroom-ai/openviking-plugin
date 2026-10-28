@@ -17,7 +17,7 @@ Memories are automatically extracted from conversations (profile, preferences, e
 
 - Automatic memory recall — queries OpenViking before each prompt, injects relevant memories as context
 - Session archiving — sends conversation turns after each response, commits at token threshold for async memory extraction
-- Pre-compaction archive — saves messages synchronously before MindRoom compacts the context window
+- Pre-compaction archive — saves the user messages and agent replies synchronously before MindRoom compacts the context window
 - Session initialization — creates an OpenViking session keyed by `room_id:thread_id` on new threads
 - Agent memory tools — explicit search, store, and delete via toolkit
 - Graceful degradation — if the server is unreachable, hooks warn once and pass through
@@ -27,7 +27,8 @@ Memories are automatically extracted from conversations (profile, preferences, e
 1. On `session:started`, creates an OpenViking session keyed by `room_id:thread_id`.
 2. On `message:enrich`, queries OpenViking for memories relevant to the incoming message and injects them as context.
 3. On `message:after_response`, sends the conversation turn to OpenViking. When accumulated tokens exceed the commit threshold, triggers `commit()` which runs async memory extraction (8 categories: profile, preferences, entities, events, cases, patterns, tools, skills).
-4. On `compaction:before`, synchronously commits all buffered messages before MindRoom compacts the context window.
+4. On `compaction:before`, sends each user message and agent reply being compacted to OpenViking and synchronously commits the session before MindRoom compacts the context window.
+   It archives only the words people and the agent wrote, without the context MindRoom attaches to messages, so the memories this plugin recalled into a prompt are not archived again at each compaction.
 5. Agents can explicitly search, store, or delete memories via the toolkit.
 
 ## Tools (toolkit: `openviking`)
@@ -45,7 +46,7 @@ Memories are automatically extracted from conversations (profile, preferences, e
 | `openviking-init-session` | `session:started` | 10 | Create OpenViking session for the thread |
 | `openviking-recall` | `message:enrich` | 30 | Inject recalled memories into prompt context |
 | `openviking-archive-turn` | `message:after_response` | 50 | Archive conversation turns, commit at token threshold |
-| `openviking-pre-compaction` | `compaction:before` | 10 | Save messages before context compaction |
+| `openviking-pre-compaction` | `compaction:before` | 10 | Save the compacted conversation before context compaction |
 
 ## Configuration
 
@@ -58,6 +59,9 @@ Plugin settings via environment variables:
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD` | `8000` | Token count that triggers session commit |
 
 ## Install
+
+The plugin needs the MindRoom release named by `MINIMUM_MINDROOM_RELEASE` in `hooks.py` or later, whose compaction hooks carry the conversation as `ctx.transcript`.
+On an older MindRoom it refuses to load and names the release it needs.
 
 Vendor this plugin with the MindRoom CLI:
 

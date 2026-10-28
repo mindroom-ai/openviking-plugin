@@ -2,36 +2,41 @@
 
 from __future__ import annotations
 
+import dataclasses
+import importlib.util
 import logging
+import re
+import sys
+import types
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, call, patch
 
 import httpx
+import mindroom.plugin_api
 import pytest
-from agno.models.message import Message
 from mindroom.config.main import Config
 from mindroom.constants import RuntimePaths
 from mindroom.history.types import HistoryScope
-from mindroom.hooks import (
+from mindroom.hooks.decorators import get_hook_metadata
+from mindroom.plugin_api import (
     AfterResponseContext,
     CompactionHookContext,
     MessageEnrichContext,
     MessageEnvelope,
+    MessageTarget,
     ResponseResult,
     SenderKind,
     SessionHookContext,
+    TranscriptLine,
     TurnIntent,
     TurnOrigin,
     TurnTrust,
 )
-from mindroom.hooks.decorators import get_hook_metadata
-from mindroom.message_target import MessageTarget
 
 import openviking.hooks as hooks
 from openviking.hooks import (
     _ensure_server_running,
     _estimate_tokens,
-    _extract_text,
     _format_memories,
     _session_key,
     archive_turn,
@@ -118,18 +123,21 @@ def _after_response_context(
     )
 
 
-def _compaction_context(tmp_path: Path, messages: list[Message]) -> CompactionHookContext:
+def _compaction_context(tmp_path: Path, transcript: tuple[TranscriptLine, ...]) -> CompactionHookContext:
+    # MindRoom requires `messages` until it removes the field, so these tests pass on releases before and after.
+    has_messages = "messages" in {field.name for field in dataclasses.fields(CompactionHookContext)}
     return CompactionHookContext(
         **_base_kwargs(tmp_path, "compaction:before"),
+        **({"messages": []} if has_messages else {}),
         agent_name="code",
         scope=HistoryScope(kind="agent", scope_id="code"),
         room_id="r1",
         thread_id="t1",
-        messages=messages,
         session_id="mindroom-session-1",
         token_count_before=100,
         token_count_after=None,
         compaction_summary=None,
+        transcript=transcript,
     )
 
 
@@ -167,21 +175,6 @@ class TestHelpers:
     def test_estimate_tokens(self) -> None:
         assert _estimate_tokens("abcdefgh") == 2
         assert _estimate_tokens("") == 0
-
-    def test_extract_text_from_agno_message(self) -> None:
-        assert _extract_text(Message(role="user", content="hello")) == "hello"
-        assert (
-            _extract_text(
-                Message(
-                    role="user",
-                    content=[
-                        {"type": "text", "text": "a"},
-                        {"type": "text", "text": "b"},
-                    ],
-                )
-            )
-            == "a\nb"
-        )
 
     def test_format_memories_empty(self) -> None:
         assert _format_memories([], 2000) == ""
@@ -291,14 +284,14 @@ class TestArchiveTurn:
 
 class TestPreCompactionArchive:
     @pytest.mark.asyncio
-    async def test_archives_agno_messages_and_commits(self, tmp_path: Path) -> None:
+    async def test_archives_each_transcript_line_and_commits(self, tmp_path: Path) -> None:
         context = _compaction_context(
             tmp_path,
-            [
-                Message(role="user", content="msg1"),
-                Message(role="assistant", content="msg2"),
-                Message(role="system", content="skip me"),
-            ],
+            (
+                TranscriptLine(role="user", sender="@alice:localhost", display_name="Alice", text="msg1"),
+                TranscriptLine(role="assistant", sender=None, display_name=None, text="msg2"),
+                TranscriptLine(role="user", sender="@bob:localhost", display_name=None, text="msg3"),
+            ),
         )
         mock_client = AsyncMock()
         mock_client.commit_session.return_value = {"ok": True}
@@ -312,9 +305,34 @@ class TestPreCompactionArchive:
         assert mock_client.add_message.await_args_list == [
             call("r1:t1", "user", "msg1"),
             call("r1:t1", "assistant", "msg2"),
+            call("r1:t1", "user", "msg3"),
         ]
         mock_client.commit_session.assert_awaited_once_with("r1:t1", wait=True)
         assert pending == {}
+
+
+class TestMindRoomVersionGate:
+    @pytest.mark.parametrize("has_plugin_api", [True, False])
+    def test_refuses_to_load_without_transcript_line(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        has_plugin_api: bool,
+    ) -> None:
+        older_plugin_api: types.ModuleType | None = None
+        if has_plugin_api:
+            older_plugin_api = types.ModuleType("mindroom.plugin_api")
+            for name in mindroom.plugin_api.__all__:
+                if name != "TranscriptLine":
+                    setattr(older_plugin_api, name, getattr(mindroom.plugin_api, name))
+        monkeypatch.setitem(sys.modules, "mindroom.plugin_api", older_plugin_api)
+        spec = importlib.util.spec_from_file_location("openviking.hooks_on_older_mindroom", hooks.__file__)
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        module.__package__ = "openviking"
+
+        with pytest.raises(ImportError, match=re.escape(hooks.MINIMUM_MINDROOM_RELEASE)):
+            spec.loader.exec_module(module)
 
 
 class TestInitSession:
