@@ -172,9 +172,6 @@ async def archive_turn(ctx: AfterResponseContext) -> None:
 async def pre_compaction_archive(ctx: CompactionHookContext) -> None:
     """Archive what was said to OpenViking and commit buffered turns before MindRoom compacts them away."""
     session_id = _session_key(ctx.room_id, ctx.thread_id)
-    if not ctx.transcript and session_id not in _SESSION_PENDING_TOKENS:
-        return
-
     client = get_client()
 
     for line in ctx.transcript:

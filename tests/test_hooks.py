@@ -324,7 +324,8 @@ class TestPreCompactionArchive:
         assert pending == {}
 
     @pytest.mark.asyncio
-    async def test_skips_empty_transcript_without_buffered_turns(self, tmp_path: Path) -> None:
+    async def test_commits_when_transcript_is_empty_and_nothing_is_tracked(self, tmp_path: Path) -> None:
+        """After a restart, OpenViking can still hold turns this process no longer tracks."""
         mock_client = AsyncMock()
         with (
             patch("openviking.hooks.get_client", return_value=mock_client),
@@ -333,7 +334,7 @@ class TestPreCompactionArchive:
             await pre_compaction_archive(_compaction_context(tmp_path, ()))
 
         mock_client.add_message.assert_not_awaited()
-        mock_client.commit_session.assert_not_awaited()
+        mock_client.commit_session.assert_awaited_once_with("r1:t1", wait=True)
 
 
 class TestInitSession:
