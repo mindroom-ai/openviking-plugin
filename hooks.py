@@ -6,13 +6,13 @@ import logging
 from typing import Any
 
 import httpx
-from agno.models.message import Message
-from mindroom.hooks import (
+from mindroom.plugin_api import (
     AfterResponseContext,
     CompactionHookContext,
     EnrichmentItem,
     MessageEnrichContext,
     SessionHookContext,
+    TranscriptLine,
     hook,
 )
 
@@ -47,20 +47,12 @@ def _format_memories(memories: list[dict[str, Any]], max_tokens: int) -> str:
     return "\n".join(lines)
 
 
-def _extract_text(message: Message) -> str:
-    """Extract plain text from one Agno message."""
-    content = message.content
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                parts.append(part.get("text", ""))
-            elif isinstance(part, str):
-                parts.append(part)
-        return "\n".join(parts)
-    return "" if content is None else str(content)
+def _attributed_text(line: TranscriptLine) -> str:
+    """Prefix a user line with its sender, so lines from different people in one session stay apart."""
+    if line.sender is None:
+        return line.text
+    speaker = f"{line.display_name} ({line.sender})" if line.display_name else line.sender
+    return f"{speaker}: {line.text}"
 
 
 def _session_key(room_id: str, thread_id: str | None) -> str:
@@ -178,17 +170,12 @@ async def archive_turn(ctx: AfterResponseContext) -> None:
     timeout_ms=30000,
 )
 async def pre_compaction_archive(ctx: CompactionHookContext) -> None:
-    """Archive all messages to OpenViking before MindRoom compacts them away."""
-    if not ctx.messages:
-        return
-
+    """Archive what was said to OpenViking and commit buffered turns before MindRoom compacts them away."""
     session_id = _session_key(ctx.room_id, ctx.thread_id)
     client = get_client()
 
-    for message in ctx.messages:
-        role = message.role
-        if role in ("user", "assistant"):
-            await client.add_message(session_id, role, _extract_text(message))
+    for line in ctx.transcript:
+        await client.add_message(session_id, line.role, _attributed_text(line))
 
     # Synchronous commit to ensure nothing is lost before compaction
     result = await client.commit_session(session_id, wait=True)

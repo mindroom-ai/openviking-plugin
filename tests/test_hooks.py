@@ -8,30 +8,29 @@ from unittest.mock import AsyncMock, Mock, call, patch
 
 import httpx
 import pytest
-from agno.models.message import Message
 from mindroom.config.main import Config
 from mindroom.constants import RuntimePaths
 from mindroom.history.types import HistoryScope
-from mindroom.hooks import (
+from mindroom.hooks.decorators import get_hook_metadata
+from mindroom.plugin_api import (
     AfterResponseContext,
     CompactionHookContext,
     MessageEnrichContext,
     MessageEnvelope,
+    MessageTarget,
     ResponseResult,
     SenderKind,
     SessionHookContext,
+    TranscriptLine,
     TurnIntent,
     TurnOrigin,
     TurnTrust,
 )
-from mindroom.hooks.decorators import get_hook_metadata
-from mindroom.message_target import MessageTarget
 
 import openviking.hooks as hooks
 from openviking.hooks import (
     _ensure_server_running,
     _estimate_tokens,
-    _extract_text,
     _format_memories,
     _session_key,
     archive_turn,
@@ -118,18 +117,19 @@ def _after_response_context(
     )
 
 
-def _compaction_context(tmp_path: Path, messages: list[Message]) -> CompactionHookContext:
+def _compaction_context(tmp_path: Path, transcript: tuple[TranscriptLine, ...]) -> CompactionHookContext:
     return CompactionHookContext(
         **_base_kwargs(tmp_path, "compaction:before"),
+        messages=[],
         agent_name="code",
         scope=HistoryScope(kind="agent", scope_id="code"),
         room_id="r1",
         thread_id="t1",
-        messages=messages,
         session_id="mindroom-session-1",
         token_count_before=100,
         token_count_after=None,
         compaction_summary=None,
+        transcript=transcript,
     )
 
 
@@ -167,21 +167,6 @@ class TestHelpers:
     def test_estimate_tokens(self) -> None:
         assert _estimate_tokens("abcdefgh") == 2
         assert _estimate_tokens("") == 0
-
-    def test_extract_text_from_agno_message(self) -> None:
-        assert _extract_text(Message(role="user", content="hello")) == "hello"
-        assert (
-            _extract_text(
-                Message(
-                    role="user",
-                    content=[
-                        {"type": "text", "text": "a"},
-                        {"type": "text", "text": "b"},
-                    ],
-                )
-            )
-            == "a\nb"
-        )
 
     def test_format_memories_empty(self) -> None:
         assert _format_memories([], 2000) == ""
@@ -291,18 +276,22 @@ class TestArchiveTurn:
 
 class TestPreCompactionArchive:
     @pytest.mark.asyncio
-    async def test_archives_agno_messages_and_commits(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("pending", [{}, {"r1:t1": 10}], ids=["nothing_buffered", "turns_buffered"])
+    async def test_archives_each_transcript_line_with_its_speaker_and_commits(
+        self,
+        tmp_path: Path,
+        pending: dict[str, int],
+    ) -> None:
         context = _compaction_context(
             tmp_path,
-            [
-                Message(role="user", content="msg1"),
-                Message(role="assistant", content="msg2"),
-                Message(role="system", content="skip me"),
-            ],
+            (
+                TranscriptLine(role="user", sender="@alice:localhost", display_name="Alice", text="I'll take it"),
+                TranscriptLine(role="assistant", sender=None, display_name=None, text="Noted"),
+                TranscriptLine(role="user", sender="@bob:localhost", display_name=None, text="I'll take it"),
+            ),
         )
         mock_client = AsyncMock()
         mock_client.commit_session.return_value = {"ok": True}
-        pending = {"r1:t1": 10}
         with (
             patch("openviking.hooks.get_client", return_value=mock_client),
             patch.object(hooks, "_SESSION_PENDING_TOKENS", pending),
@@ -310,11 +299,42 @@ class TestPreCompactionArchive:
             await pre_compaction_archive(context)
 
         assert mock_client.add_message.await_args_list == [
-            call("r1:t1", "user", "msg1"),
-            call("r1:t1", "assistant", "msg2"),
+            call("r1:t1", "user", "Alice (@alice:localhost): I'll take it"),
+            call("r1:t1", "assistant", "Noted"),
+            call("r1:t1", "user", "@bob:localhost: I'll take it"),
         ]
         mock_client.commit_session.assert_awaited_once_with("r1:t1", wait=True)
         assert pending == {}
+
+    @pytest.mark.asyncio
+    async def test_commits_buffered_turns_when_transcript_is_empty(self, tmp_path: Path) -> None:
+        mock_client = AsyncMock()
+        mock_client.commit_session.return_value = {"ok": True}
+        pending: dict[str, int] = {}
+        with (
+            patch("openviking.hooks.get_client", return_value=mock_client),
+            patch.object(hooks, "_SESSION_PENDING_TOKENS", pending),
+        ):
+            await archive_turn(_after_response_context(tmp_path))
+            assert "r1:t1" in pending
+            await pre_compaction_archive(_compaction_context(tmp_path, ()))
+
+        assert mock_client.add_message.await_count == 2
+        mock_client.commit_session.assert_awaited_once_with("r1:t1", wait=True)
+        assert pending == {}
+
+    @pytest.mark.asyncio
+    async def test_commits_when_transcript_is_empty_and_nothing_is_tracked(self, tmp_path: Path) -> None:
+        """After a restart, OpenViking can still hold turns this process no longer tracks."""
+        mock_client = AsyncMock()
+        with (
+            patch("openviking.hooks.get_client", return_value=mock_client),
+            patch.object(hooks, "_SESSION_PENDING_TOKENS", {}),
+        ):
+            await pre_compaction_archive(_compaction_context(tmp_path, ()))
+
+        mock_client.add_message.assert_not_awaited()
+        mock_client.commit_session.assert_awaited_once_with("r1:t1", wait=True)
 
 
 class TestInitSession:
