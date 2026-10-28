@@ -29,6 +29,7 @@ Memories are automatically extracted from conversations (profile, preferences, e
 3. On `message:after_response`, sends the conversation turn to OpenViking. When accumulated tokens exceed the commit threshold, triggers `commit()` which runs async memory extraction (8 categories: profile, preferences, entities, events, cases, patterns, tools, skills).
 4. On `compaction:before`, sends each user and assistant line being compacted to OpenViking, with each user line prefixed by its sender's Matrix ID and, when the message carried one, display name, then synchronously commits the session, including turns buffered since the last commit, before MindRoom compacts the context window.
    The lines leave out the context MindRoom attaches to messages, so the memories this plugin recalled are not archived again at each compaction, but they still include other agents' messages and MindRoom's own thread notes, such as the note that earlier messages were omitted.
+   Automation prompts and their replies, job and media follow-up prompts, and the reply of a stopped turn are not in the transcript, so compaction does not archive them.
 5. Agents can explicitly search, store, or delete memories via the toolkit.
 
 ## Tools (toolkit: `openviking`)

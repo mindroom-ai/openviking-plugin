@@ -283,7 +283,12 @@ class TestArchiveTurn:
 
 class TestPreCompactionArchive:
     @pytest.mark.asyncio
-    async def test_archives_each_transcript_line_with_its_speaker_and_commits(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("pending", [{}, {"r1:t1": 10}], ids=["nothing_buffered", "turns_buffered"])
+    async def test_archives_each_transcript_line_with_its_speaker_and_commits(
+        self,
+        tmp_path: Path,
+        pending: dict[str, int],
+    ) -> None:
         context = _compaction_context(
             tmp_path,
             (
@@ -294,7 +299,6 @@ class TestPreCompactionArchive:
         )
         mock_client = AsyncMock()
         mock_client.commit_session.return_value = {"ok": True}
-        pending = {"r1:t1": 10}
         with (
             patch("openviking.hooks.get_client", return_value=mock_client),
             patch.object(hooks, "_SESSION_PENDING_TOKENS", pending),
