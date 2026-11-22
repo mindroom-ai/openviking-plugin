@@ -8,17 +8,17 @@ from unittest.mock import AsyncMock, Mock, call, patch
 
 import httpx
 import pytest
-from mindroom.config.main import Config
-from mindroom.constants import RuntimePaths
 from mindroom.history.types import HistoryScope
 from mindroom.hooks.decorators import get_hook_metadata
 from mindroom.plugin_api import (
     AfterResponseContext,
     CompactionHookContext,
+    Config,
     MessageEnrichContext,
     MessageEnvelope,
     MessageTarget,
     ResponseResult,
+    RuntimePaths,
     SenderKind,
     SessionHookContext,
     TranscriptLine,
