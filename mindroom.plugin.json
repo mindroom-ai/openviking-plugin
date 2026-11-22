@@ -1,1 +1,1 @@
-{"name": "openviking", "hooks_module": "hooks.py", "tools_module": "tools.py"}
+{"name": "openviking", "mindroom_plugin_api": "1.0", "hooks_module": "hooks.py", "tools_module": "tools.py"}

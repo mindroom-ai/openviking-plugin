@@ -7,13 +7,13 @@ import uuid
 
 from agno.tools import Toolkit, tool
 from agno.utils.log import logger
-from mindroom.tool_system.declarations import (
+from mindroom.plugin_api import (
     SetupType,
     ToolCategory,
     ToolFileAccess,
     ToolStatus,
+    register_tool_with_metadata,
 )
-from mindroom.tool_system.registration import register_tool_with_metadata
 
 from .client import get_client
 
