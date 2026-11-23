@@ -45,7 +45,7 @@ agents:
 ```
 
 Update later with `mindroom plugins update openviking-plugin`.
-Requires MindRoom plugin API 1.2 or later.
+Needs MindRoom v2026.11.187 or later (plugin API 1.2).
 
 ## Tools
 
@@ -66,7 +66,7 @@ Toolkit name: `openviking`.
 | `openviking-archive-turn` | `message:after_response` | 50 | Append the user and assistant messages and trigger an async commit at `OPENVIKING_COMMIT_TOKEN_THRESHOLD`. |
 | `openviking-pre-compaction` | `compaction:before` | 10 | Archive compacted transcript lines (`Display Name (@user:server): text`) and commit synchronously (`wait=true`). |
 
-## Environment variables
+## Settings
 
 Configured via **process environment variables read at startup** (not `plugins[].settings` in `config.yaml`):
 
