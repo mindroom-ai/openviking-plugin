@@ -6,8 +6,18 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from mindroom.plugin_api import Toolkit
 
-from openviking.tools import memory_forget, memory_recall, memory_store
+from openviking.tools import OpenVikingMemoryTools, memory_forget, memory_recall, memory_store
+
+
+class TestToolkit:
+    def test_registers_memory_tools_on_plugin_api_toolkit(self) -> None:
+        toolkit = OpenVikingMemoryTools()
+        assert isinstance(toolkit, Toolkit)
+        assert toolkit.name == "openviking"
+        assert toolkit.instructions
+        assert list(toolkit.functions) == ["memory_recall", "memory_store", "memory_forget"]
 
 
 class TestMemoryRecall:
