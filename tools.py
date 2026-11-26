@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import TYPE_CHECKING
 
-from agno.tools import Toolkit, tool
-from agno.utils.log import logger
 from mindroom.plugin_api import (
     SetupType,
     ToolCategory,
     ToolFileAccess,
+    Toolkit,
     ToolStatus,
+    get_logger,
     register_tool_with_metadata,
+    tool,
 )
 
 from .client import get_client
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+logger = get_logger(__name__)
 
 
 def _payload(status: str, **kwargs: object) -> str:
@@ -33,11 +40,7 @@ class OpenVikingMemoryTools(Toolkit):
             instructions=(
                 "Use these tools to search, store, and delete long-term memories in OpenViking."
             ),
-            tools=[],
         )
-        self.register(self.memory_recall)
-        self.register(self.memory_store)
-        self.register(self.memory_forget)
         logger.debug("Registered OpenViking memory tools")
 
     @tool(name="memory_recall", description="Search long-term memory for relevant information")
@@ -133,10 +136,9 @@ def openviking_factory() -> type[OpenVikingMemoryTools]:
     return OpenVikingMemoryTools
 
 
-def _get_async_entrypoint(tool_name: str):
+def _get_async_entrypoint(tool_name: str) -> Callable[..., Awaitable[str]] | None:
     toolkit = OpenVikingMemoryTools()
-    function = toolkit.get_async_functions()[tool_name]
-    return function.entrypoint
+    return toolkit.functions.get(tool_name)
 
 
 async def memory_recall(query: str) -> str:
