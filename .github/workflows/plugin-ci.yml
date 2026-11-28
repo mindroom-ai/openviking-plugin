@@ -19,6 +19,7 @@ jobs:
       contents: read
     uses: mindroom-ai/mindroom/.github/workflows/plugin-ci.yml@v2026.11.526
     with:
+      mindroom_ref: main
       plugin_repository: ${{ github.repository }}
       plugin_ref: ${{ github.sha }}
       artifact_name: openviking-plugin
