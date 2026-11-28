@@ -45,7 +45,7 @@ agents:
 ```
 
 Update later with `mindroom plugins update openviking-plugin`.
-Needs MindRoom v2026.11.187 or later (plugin API 1.2).
+Needs MindRoom plugin API 1.35 or later.
 
 ## Tools
 
