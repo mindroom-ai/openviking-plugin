@@ -23,7 +23,7 @@ Relevant memories from long-term storage:
 
 - **Automatic recall:** queries OpenViking before each turn and injects matching memories up to the recall token budget.
 - **Session archiving & pre-compaction flush:** archives turns per `room_id:thread_id` (or `room_id:default` outside threads), commits asynchronously at the token threshold, and commits synchronously before MindRoom compacts context.
-- **Explicit memory tools:** lets agents recall, store, or delete memories directly via the `openviking` toolkit.
+- **Explicit memory tool:** lets agents recall, store, or forget memories directly via the `openviking` tool.
 - **Graceful degradation:** if the OpenViking server is unreachable or returns errors, hooks log warnings and pass through without breaking turns.
 
 ## Quick start
@@ -49,13 +49,13 @@ Needs MindRoom v2026.11.187 or later (plugin API 1.2).
 
 ## Tools
 
-Toolkit name: `openviking`.
+Toolkit name: `openviking` (single action-based tool: `openviking(action, query=None, content=None, category=None)`).
 
-| Tool | Purpose |
-|------|---------|
-| `memory_recall(query)` | Search `user` and `agent` namespaces (up to 10 results) for relevant long-term memories. |
-| `memory_store(content, category="general")` | Store a memory by creating a one-off OpenViking session, adding the content, and committing it. `category` is currently ignored by OpenViking's session-commit storage. |
-| `memory_forget(query)` | Search `user` and `agent` namespaces (up to 10 matches) and delete each matching memory URI. |
+| Action | Parameters | Purpose |
+|--------|------------|---------|
+| `recall` | `query` | Search `user` and `agent` namespaces (up to 10 results) for relevant long-term memories. |
+| `store` | `content`, optional `category` (default `"general"`) | Store a memory by creating a one-off OpenViking session, adding the content, and committing it. `category` is currently ignored by OpenViking's session-commit storage. |
+| `forget` | `query` | Search `user` and `agent` namespaces (up to 10 matches) and delete each matching memory URI. |
 
 ## Hooks
 
@@ -137,7 +137,7 @@ OPENAI_API_KEY=<your-key> \
 4. **Pre-compaction flush (`compaction:before`):** sends each compacted transcript line to the session—prefixing sender-attributed lines as `Display Name (@user:server): text` (or `@user:server: text` when no display name is present)—then calls `commit(wait=true)` synchronously so buffered turns are saved before compaction.
    - Transcript lines omit MindRoom-attached prompt enrichments, so recalled memories are not re-archived during compaction, while preserving other agents' messages and MindRoom thread notes (such as omitted-message notices).
    - Automation prompts and replies, job/media follow-up prompts, and replies of stopped turns are absent from compaction transcripts, though step 3 still archives every completed turn (including automation and job follow-ups).
-5. **Explicit operations:** agents can search, store, or forget memories directly via `memory_recall`, `memory_store`, and `memory_forget`.
+5. **Explicit operations:** agents can recall, store, or forget memories directly via `openviking(action="recall" | "store" | "forget", ...)`.
 
 </details>
 
@@ -149,7 +149,7 @@ The plugin talks to OpenViking strictly over HTTP (`httpx`). The OpenViking serv
 ```text
 MindRoom Agent
   ├── hooks.py   → lifecycle hooks (init, recall, archive, compaction)
-  ├── tools.py   → agent tools (memory_recall, memory_store, memory_forget)
+  ├── tools.py   → agent tool (openviking: recall, store, forget)
   ├── client.py  → async HTTP client (httpx)
   └── config.py  → process env var configuration
           │

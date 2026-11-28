@@ -3,101 +3,277 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mindroom.plugin_api import Toolkit
+from mindroom.plugin_api import Toolkit, toolkit_functions
+from mindroom.tool_system.toolkits import (
+    ToolkitFinishing,
+    ToolOutputFilePolicy,
+    adapt_toolkit,
+)
+from openviking.tools import OpenVikingMemoryTools, openviking_factory
 
-from openviking.tools import OpenVikingMemoryTools, memory_forget, memory_recall, memory_store
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
-class TestToolkit:
-    def test_registers_memory_tools_on_plugin_api_toolkit(self) -> None:
-        toolkit = OpenVikingMemoryTools()
+@pytest.fixture
+def toolkit() -> OpenVikingMemoryTools:
+    return OpenVikingMemoryTools()
+
+
+class TestToolkitSchema:
+    def test_registers_single_openviking_tool_and_schema(
+        self, toolkit: OpenVikingMemoryTools, tmp_path: Path
+    ) -> None:
+        assert openviking_factory() is OpenVikingMemoryTools
         assert isinstance(toolkit, Toolkit)
         assert toolkit.name == "openviking"
         assert toolkit.instructions
-        assert list(toolkit.functions) == ["memory_recall", "memory_store", "memory_forget"]
+        assert list(toolkit.functions) == ["openviking"]
+        assert toolkit.offer_background_after is False
+        assert toolkit.offer_output_path is False
 
+        toolkit.function_finishing = ToolkitFinishing(
+            output_files=ToolOutputFilePolicy(workspace_root=tmp_path)
+        )
+        adapted = adapt_toolkit(toolkit)
+        assert len(adapted.functions) == 1
 
-class TestMemoryRecall:
+        fn = adapted.functions[0]
+        assert fn.name == "openviking"
+        assert fn.description
+        assert fn.offer_background_after is False
+        assert fn.offer_output_path is False
+        assert fn.parameters["required"] == ["action"]
+        assert fn.parameters["properties"]["action"]["enum"] == [
+            "recall",
+            "store",
+            "forget",
+        ]
+        assert set(fn.parameters["properties"]) == {
+            "action",
+            "query",
+            "content",
+            "category",
+        }
+        assert "background_after" not in fn.parameters["properties"]
+        assert "mindroom_output_path" not in fn.parameters["properties"]
+
     @pytest.mark.asyncio
-    async def test_returns_results(self) -> None:
+    async def test_adapted_entrypoint_invokes_openviking(
+        self, toolkit: OpenVikingMemoryTools
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client.find.return_value = [{"uri": "viking://u/1", "content": "fact A"}]
+        entrypoint = toolkit_functions(toolkit)["openviking"]
+
+        with patch("openviking.tools.get_client", return_value=mock_client):
+            result = json.loads(await entrypoint(action="recall", query="fact"))
+
+        assert result["status"] == "ok"
+        assert result["action"] == "recall"
+        assert result["results"] == [{"uri": "viking://u/1", "content": "fact A"}]
+
+
+class TestValidation:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad_action", ["invalid", ""])
+    async def test_rejects_invalid_action(
+        self, toolkit: OpenVikingMemoryTools, bad_action: str
+    ) -> None:
+        with patch("openviking.tools.get_client") as mock_get_client:
+            result = json.loads(
+                await toolkit.openviking(action=bad_action)  # type: ignore[arg-type]
+            )
+
+        assert result["status"] == "error"
+        assert result["tool"] == "openviking"
+        assert result["action"] == bad_action
+        assert "unsupported action" in result["message"].lower()
+        mock_get_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("action", "kwargs"),
+        [
+            ("recall", {}),
+            ("recall", {"query": ""}),
+            ("recall", {"query": "   "}),
+            ("forget", {}),
+            ("forget", {"query": ""}),
+            ("forget", {"query": "   "}),
+            ("store", {}),
+            ("store", {"content": ""}),
+            ("store", {"content": "   "}),
+            ("store", {"content": "fact", "category": "   "}),
+        ],
+    )
+    async def test_rejects_missing_or_blank_required_args(
+        self, toolkit: OpenVikingMemoryTools, action: Any, kwargs: dict[str, Any]
+    ) -> None:
+        with patch("openviking.tools.get_client") as mock_get_client:
+            result = json.loads(await toolkit.openviking(action=action, **kwargs))
+
+        assert result["status"] == "error"
+        assert result["action"] == action
+        assert "empty" in result["message"].lower()
+        mock_get_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("action", "kwargs", "unexpected"),
+        [
+            ("recall", {"query": "q", "content": "c"}, "content"),
+            ("recall", {"query": "q", "category": "work"}, "category"),
+            ("recall", {"query": "q", "content": "c", "category": "work"}, "content"),
+            ("forget", {"query": "q", "content": "c"}, "content"),
+            ("forget", {"query": "q", "category": "work"}, "category"),
+            ("store", {"content": "c", "query": "q"}, "query"),
+            ("store", {"content": "c", "query": ""}, "query"),
+        ],
+    )
+    async def test_rejects_cross_action_args(
+        self,
+        toolkit: OpenVikingMemoryTools,
+        action: Any,
+        kwargs: dict[str, Any],
+        unexpected: str,
+    ) -> None:
+        with patch("openviking.tools.get_client") as mock_get_client:
+            result = json.loads(await toolkit.openviking(action=action, **kwargs))
+
+        assert result["status"] == "error"
+        assert result["action"] == action
+        assert unexpected in result["message"]
+        mock_get_client.assert_not_called()
+
+
+class TestRecall:
+    @pytest.mark.asyncio
+    async def test_returns_results(self, toolkit: OpenVikingMemoryTools) -> None:
         mock_client = AsyncMock()
         mock_client.find.return_value = [
             {"uri": "viking://u/1", "content": "fact A"},
             {"uri": "viking://u/2", "content": "fact B"},
         ]
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_recall("test query"))
-            assert result["status"] == "ok"
-            assert result["action"] == "recall"
-            assert len(result["results"]) == 2
+            result = json.loads(
+                await toolkit.openviking(action="recall", query=" test query ")
+            )
+
+        mock_client.find.assert_awaited_once_with(
+            "test query", namespaces=["user", "agent"], limit=10
+        )
+        assert result["status"] == "ok"
+        assert result["action"] == "recall"
+        assert len(result["results"]) == 2
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_no_results(self) -> None:
+    async def test_returns_empty_when_no_results(
+        self, toolkit: OpenVikingMemoryTools
+    ) -> None:
         mock_client = AsyncMock()
         mock_client.find.return_value = []
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_recall("unknown"))
-            assert result["status"] == "ok"
-            assert result["results"] == []
+            result = json.loads(
+                await toolkit.openviking(action="recall", query="unknown")
+            )
+
+        assert result["status"] == "ok"
+        assert result["action"] == "recall"
+        assert result["results"] == []
 
     @pytest.mark.asyncio
-    async def test_handles_error(self) -> None:
+    async def test_handles_error(self, toolkit: OpenVikingMemoryTools) -> None:
         mock_client = AsyncMock()
         mock_client.find.side_effect = Exception("connection error")
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_recall("test"))
-            assert result["status"] == "error"
+            result = json.loads(await toolkit.openviking(action="recall", query="test"))
+
+        assert result["status"] == "error"
+        assert result["action"] == "recall"
 
 
-class TestMemoryStore:
+class TestStore:
     @pytest.mark.asyncio
-    async def test_stores_memory(self) -> None:
+    async def test_stores_memory_with_default_category(
+        self, toolkit: OpenVikingMemoryTools
+    ) -> None:
         mock_client = AsyncMock()
         mock_client.store_memory.return_value = {
             "session_id": "memory-abc123",
             "archive_uri": "viking://archive/general/abc123",
         }
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_store("important fact"))
-            assert result["status"] == "ok"
-            assert result["action"] == "store"
-            assert result["session_id"] == "memory-abc123"
-            assert result["uri"] == "viking://archive/general/abc123"
+            result = json.loads(
+                await toolkit.openviking(action="store", content=" important fact ")
+            )
+
+        uri_arg, content_arg = mock_client.store_memory.await_args.args
+        assert uri_arg.startswith("viking://user/memories/general/")
+        assert content_arg == "important fact"
+        assert result["status"] == "ok"
+        assert result["action"] == "store"
+        assert result["session_id"] == "memory-abc123"
+        assert result["uri"] == "viking://archive/general/abc123"
 
     @pytest.mark.asyncio
-    async def test_stores_with_category(self) -> None:
+    async def test_stores_with_category(self, toolkit: OpenVikingMemoryTools) -> None:
         mock_client = AsyncMock()
         mock_client.store_memory.return_value = {
             "session_id": "memory-work123",
             "archive_uri": "viking://archive/work/abc123",
         }
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_store("work fact", category="work"))
-            assert result["status"] == "ok"
-            assert result["session_id"] == "memory-work123"
-            assert "work" in result["uri"]
+            result = json.loads(
+                await toolkit.openviking(
+                    action="store", content="work fact", category="work"
+                )
+            )
+
+        uri_arg, content_arg = mock_client.store_memory.await_args.args
+        assert uri_arg.startswith("viking://user/memories/work/")
+        assert content_arg == "work fact"
+        assert result["status"] == "ok"
+        assert result["action"] == "store"
+        assert result["session_id"] == "memory-work123"
+        assert "work" in result["uri"]
 
     @pytest.mark.asyncio
-    async def test_rejects_empty_content(self) -> None:
-        result = json.loads(await memory_store(""))
-        assert result["status"] == "error"
-        assert "empty" in result["message"].lower()
-
-    @pytest.mark.asyncio
-    async def test_handles_store_failure(self) -> None:
+    async def test_handles_store_failure(self, toolkit: OpenVikingMemoryTools) -> None:
         mock_client = AsyncMock()
         mock_client.store_memory.return_value = None
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_store("content"))
-            assert result["status"] == "error"
+            result = json.loads(
+                await toolkit.openviking(action="store", content="content")
+            )
 
+        assert result["status"] == "error"
+        assert result["action"] == "store"
 
-class TestMemoryForget:
     @pytest.mark.asyncio
-    async def test_deletes_matching_memories(self) -> None:
+    async def test_handles_store_exception(
+        self, toolkit: OpenVikingMemoryTools
+    ) -> None:
+        mock_client = AsyncMock()
+        mock_client.store_memory.side_effect = Exception("boom")
+        with patch("openviking.tools.get_client", return_value=mock_client):
+            result = json.loads(
+                await toolkit.openviking(action="store", content="content")
+            )
+
+        assert result["status"] == "error"
+        assert result["action"] == "store"
+
+
+class TestForget:
+    @pytest.mark.asyncio
+    async def test_deletes_matching_memories(
+        self, toolkit: OpenVikingMemoryTools
+    ) -> None:
         mock_client = AsyncMock()
         mock_client.find.return_value = [
             {"uri": "viking://u/1", "content": "fact A"},
@@ -105,27 +281,32 @@ class TestMemoryForget:
         ]
         mock_client.delete_memory.return_value = True
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_forget("test"))
-            assert result["status"] == "ok"
-            assert result["action"] == "forget"
-            assert len(result["deleted"]) == 2
+            result = json.loads(await toolkit.openviking(action="forget", query="test"))
+
+        assert result["status"] == "ok"
+        assert result["action"] == "forget"
+        assert result["deleted"] == ["viking://u/1", "viking://u/2"]
+        assert result["failed"] == []
 
     @pytest.mark.asyncio
-    async def test_returns_empty_when_no_match(self) -> None:
+    async def test_returns_empty_when_no_match(
+        self, toolkit: OpenVikingMemoryTools
+    ) -> None:
         mock_client = AsyncMock()
         mock_client.find.return_value = []
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_forget("nothing"))
-            assert result["status"] == "ok"
-            assert result["deleted"] == []
+            result = json.loads(
+                await toolkit.openviking(action="forget", query="nothing")
+            )
+
+        assert result["status"] == "ok"
+        assert result["action"] == "forget"
+        assert result["deleted"] == []
 
     @pytest.mark.asyncio
-    async def test_rejects_empty_query(self) -> None:
-        result = json.loads(await memory_forget(""))
-        assert result["status"] == "error"
-
-    @pytest.mark.asyncio
-    async def test_reports_partial_failures(self) -> None:
+    async def test_reports_partial_failures(
+        self, toolkit: OpenVikingMemoryTools
+    ) -> None:
         mock_client = AsyncMock()
         mock_client.find.return_value = [
             {"uri": "viking://u/1", "content": "a"},
@@ -133,6 +314,19 @@ class TestMemoryForget:
         ]
         mock_client.delete_memory.side_effect = [True, False]
         with patch("openviking.tools.get_client", return_value=mock_client):
-            result = json.loads(await memory_forget("test"))
-            assert len(result["deleted"]) == 1
-            assert len(result["failed"]) == 1
+            result = json.loads(await toolkit.openviking(action="forget", query="test"))
+
+        assert result["status"] == "ok"
+        assert result["action"] == "forget"
+        assert result["deleted"] == ["viking://u/1"]
+        assert result["failed"] == ["viking://u/2"]
+
+    @pytest.mark.asyncio
+    async def test_handles_search_error(self, toolkit: OpenVikingMemoryTools) -> None:
+        mock_client = AsyncMock()
+        mock_client.find.side_effect = Exception("connection error")
+        with patch("openviking.tools.get_client", return_value=mock_client):
+            result = json.loads(await toolkit.openviking(action="forget", query="test"))
+
+        assert result["status"] == "error"
+        assert result["action"] == "forget"
